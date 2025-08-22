@@ -1,0 +1,23 @@
+# Web server & CORS
+Flask>=2.3.3,<4.0
+flask-cors>=4.0.0
+
+# Realtime (Socket.IO)
+flask-socketio>=5.3.6
+eventlet>=0.36.1
+
+# HTTP client & helpers
+requests>=2.32.0
+urllib3>=2.2.0
+python-dotenv>=1.0.1
+
+# AI clients (optional features)
+openai>=1.40.0
+google-generativeai>=0.6.0
+
+# PDF/report utilities
+pdfkit>=1.0.0
+PyPDF2>=3.0.1
+
+# If you parse YAML OpenAPI specs later:
+# PyYAML>=6.0.1
