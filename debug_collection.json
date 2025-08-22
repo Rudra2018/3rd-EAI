@@ -1,0 +1,14 @@
+{
+  "info": {
+    "name": "Debug Test Collection"
+  },
+  "item": [
+    {
+      "name": "Simple Test",
+      "request": {
+        "method": "GET",
+        "url": "https://jsonplaceholder.typicode.com/users/1"
+      }
+    }
+  ]
+}
