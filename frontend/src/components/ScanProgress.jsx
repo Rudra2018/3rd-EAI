@@ -1,44 +1,33 @@
+// src/components/ScanProgress.jsx
 import React from "react";
+import { Box, LinearProgress, Step, StepLabel, Stepper, Typography, Paper } from "@mui/material";
 
-const STEPS = [
-  { key: "initializing", label: "Initializing" },
-  { key: "Analysis", label: "Analysis" },
-  { key: "AI TestGen", label: "AI TestGen" },
-  { key: "Parsing", label: "Parsing" },
-  { key: "Standard", label: "Standard Tests" },
-  { key: "Agentic", label: "Beast Mode" },
-  { key: "AI Exec", label: "AI Exec" },
-  { key: "Verify", label: "Verification" },
-  { key: "Report", label: "Report" },
-  { key: "completed", label: "Completed" },
-];
-
-const indexFor = (phase) =>
-  Math.max(0, STEPS.findIndex((s) => s.key.toLowerCase() === String(phase || "").toLowerCase()));
-
-export default function ScanProgress({ phase, progress }) {
-  const activeIdx = indexFor(phase);
-  const pct = Math.max(0, Math.min(100, Number(progress || 0)));
+export default function ScanProgress({ progress = 0, activeStep = 0, steps = [] }) {
+  const safeSteps = steps && steps.length ? steps : ["Queued", "Recon", "Scanning", "Analyzing", "Reporting"];
+  const safeActive = Math.min(Math.max(activeStep, 0), safeSteps.length - 1);
 
   return (
-    <div>
-      <div className="progress-head">
-        <div>
-          Phase: <span className="phase">{STEPS[activeIdx]?.label || "…"}</span>
-        </div>
-        <div>{pct}%</div>
-      </div>
+    <Paper elevation={2} sx={{ p: 2 }}>
+      <Typography variant="subtitle1" gutterBottom>
+        Scan Progress
+      </Typography>
 
-      <div className="progress-wrap">
-        <div className="progress-bar" style={{ width: `${pct}%` }} />
-      </div>
+      <Box sx={{ width: "100%", mb: 2 }}>
+        <LinearProgress variant="determinate" value={progress} />
+        <Box sx={{ display: "flex", justifyContent: "space-between", mt: 0.5 }}>
+          <Typography variant="caption">{safeSteps[safeActive]}</Typography>
+          <Typography variant="caption">{Math.round(progress)}%</Typography>
+        </Box>
+      </Box>
 
-      <div className="stepper">
-        {STEPS.map((s, i) => (
-          <div key={s.key} className={`step ${i <= activeIdx ? "active" : ""}`} title={s.label} />
+      <Stepper activeStep={safeActive} alternativeLabel>
+        {safeSteps.map((label) => (
+          <Step key={label}>
+            <StepLabel>{label}</StepLabel>
+          </Step>
         ))}
-      </div>
-    </div>
+      </Stepper>
+    </Paper>
   );
 }
 

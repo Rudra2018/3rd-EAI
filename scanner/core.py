@@ -447,4 +447,5 @@ class APISecurityScanner:
                     tags=["ssrf"]
                 )]
         return []
+Scanner = APISecurityScanner
 

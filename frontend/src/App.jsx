@@ -1,20 +1,25 @@
-import React from "react";
-import ScanDashboard from "./components/ScanDashboard";
+import React, { Suspense, lazy } from "react";
+import { Container, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 
-export default function App() {
+const ScanDashboard = lazy(() => import("./components/ScanDashboard.jsx"));
+
+const theme = createTheme({
+  palette: { mode: "dark", background: { default: "#0b0e13", paper: "#121620" } }
+});
+
+export default function App(){
   return (
-    <div className="app">
-      <div className="container">
-        <header className="header">
-          <div className="brand-dot">R</div>
-          <div>
-            <div className="header-title">Rudra’s Third Eye (AI)</div>
-            <div className="header-sub">Halodoc-style Security Dashboard</div>
-          </div>
-        </header>
-        <ScanDashboard />
-      </div>
-    </div>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Container maxWidth="lg" sx={{ py: 2 }}>
+        <ErrorBoundary>
+          <Suspense fallback={<div style={{height:240}} />}>
+            <ScanDashboard />
+          </Suspense>
+        </ErrorBoundary>
+      </Container>
+    </ThemeProvider>
   );
 }
 

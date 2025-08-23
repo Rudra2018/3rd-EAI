@@ -1,7 +1,8 @@
-// frontend/postcss.config.cjs
+// v3-style PostCSS config
 module.exports = {
   plugins: {
-    '@tailwindcss/postcss': {},
-    autoprefixer: {},
-  },
+    tailwindcss: {},
+    autoprefixer: {}
+  }
 };
+
