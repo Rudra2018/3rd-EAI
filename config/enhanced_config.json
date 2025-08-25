@@ -1,0 +1,66 @@
+{
+  "app": {
+    "name": "Rudra's Third Eye AI - Enhanced",
+    "version": "3.0.0",
+    "debug": false,
+    "port": 4000
+  },
+  "ai": {
+    "models": {
+      "primary": {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "temperature": 0.3,
+        "max_tokens": 4000
+      },
+      "fallback": {
+        "provider": "gemini",
+        "model": "gemini-2.5-flash",
+        "temperature": 0.3,
+        "max_tokens": 4000
+      }
+    },
+    "crewai": {
+      "enabled": true,
+      "default_crew": "comprehensive",
+      "max_execution_time": 1800
+    }
+  },
+  "learning": {
+    "online_learning": true,
+    "adaptation_threshold": 0.1,
+    "min_samples_for_update": 50,
+    "model_retention_days": 30,
+    "concept_drift_detection": true
+  },
+  "intelligence": {
+    "nvd": {
+      "enabled": true,
+      "sync_interval_hours": 6,
+      "severity_filter": [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM"
+      ]
+    },
+    "hackerone": {
+      "enabled": true,
+      "disclosed_only": true
+    }
+  },
+  "scanning": {
+    "concurrent_scans": 3,
+    "max_scan_duration_minutes": 60,
+    "rate_limit_per_second": 10,
+    "timeout_seconds": 30
+  },
+  "reporting": {
+    "generate_pdf": true,
+    "include_ai_analysis": true,
+    "compliance_frameworks": [
+      "NIST",
+      "OWASP"
+    ],
+    "max_report_age_days": 90
+  }
+}
