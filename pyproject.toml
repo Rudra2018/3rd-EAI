@@ -1,0 +1,39 @@
+[project]
+name = "api-scanner"
+version = "0.1.0"
+description = "AI-assisted API vulnerability scanner (REST/GraphQL) with bug bounty integrations"
+requires-python = ">=3.11"
+readme = "README.md"
+authors = [{name="You", email="you@example.com"}]
+
+dependencies = [
+  "httpx>=0.27.0",
+  "aiolimiter>=1.1.0",
+  "typer[all]>=0.12.3",
+  "rich>=13.7.1",
+  "pydantic>=2.8.2",
+  "PyYAML>=6.0.1",
+  "python-dotenv>=1.0.1",
+  "orjson>=3.10.7"
+]
+
+[project.optional-dependencies]
+ai = [
+  "sentence-transformers>=3.0.1"
+]
+
+[project.scripts]
+api-scan = "api_scanner.cli:app"
+
+[build-system]
+requires = ["setuptools>=67.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# 👇 Force setuptools to package ONLY the api_scanner tree
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["api_scanner*"]
+exclude = ["tests*", "vertex*", "examples*"]
+

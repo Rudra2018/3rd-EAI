@@ -1,0 +1,18 @@
+{
+  "target": "https://graph.sandboxfiri.com",
+  "raw": [
+    {
+      "ok": true,
+      "introspection_open": false,
+      "status": 404,
+      "evidence": {
+        "snippet": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /</pre>\n</body>\n</html>\n"
+      }
+    },
+    {
+      "status": 404,
+      "snippet": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /</pre>\n</body>\n</html>\n"
+    }
+  ],
+  "findings": []
+}

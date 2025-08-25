@@ -1,0 +1,183 @@
+/* src/index.css */
+:root {
+  --bg: #0b0f14;
+  --panel: #0e141b;
+  --panel-2: #101820;
+  --text: #e6edf3;
+  --muted: #9fb0c3;
+  --border: #1f2a37;
+  --accent: #00ff9d;
+  --primary: #1f9cf0;
+
+  --high: #ff4455;
+  --med: #ffb86b;
+  --low: #8be9fd;
+  --info: #aab1c5;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+/* Layout */
+.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.app__header {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.brand h1 { margin: 0; font-size: 22px; letter-spacing: 0.2px; }
+.badge {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #0f1520, #0a0f14);
+  color: var(--muted);
+}
+
+.toolbar {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+.field > label { font-size: 12px; color: var(--muted); }
+.field > input, .field > select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.field > small { color: var(--muted); }
+
+.checkbox { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--muted); }
+.checkbox input { transform: translateY(1px); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 6px;
+}
+.card__header h2 { margin: 0; font-size: 16px; letter-spacing: 0.2px; }
+.actions { display: flex; gap: 8px; }
+
+.col-span-2 { grid-column: span 2; }
+
+/* Editors */
+.editor, .viewer, .markdown {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  min-height: 220px;
+  resize: vertical;
+}
+
+.viewer { min-height: 280px; }
+.markdown { min-height: 240px; white-space: pre-wrap; }
+
+.row { display: flex; gap: 10px; align-items: center; }
+.spacer { height: 6px; }
+
+/* Buttons */
+.btn {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, #0f1520, #0a1016);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.btn:hover { border-color: #2b3a4a; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn--primary {
+  background: linear-gradient(180deg, #0d2c4a, #0a2137);
+  border-color: #214d7a;
+}
+.btn--accent {
+  color: #02150c;
+  background: linear-gradient(180deg, #00ff9d, #17d58c);
+  border-color: #2ce6a5;
+}
+.btn--outline {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+.btn--mini { padding: 4px 8px; font-size: 12px; }
+
+/* Chips / Summary */
+.summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+.chip--high { background: rgba(255,68,85,.15); color: var(--high); }
+.chip--med  { background: rgba(255,184,107,.15); color: var(--med); }
+.chip--low  { background: rgba(139,233,253,.15); color: var(--low); }
+.chip--info { background: rgba(162,176,197,.15); color: var(--info); }
+
+/* Misc */
+.loading { color: var(--muted); font-style: italic; }
+.list { margin: 0; padding-left: 18px; }
+.list code { color: var(--muted); }
+
+.footer { margin-top: 16px; color: var(--muted); }
+.footer code { color: var(--text); }
+
