@@ -1,0 +1,8 @@
+headers:
+  Content-Type: application/json
+http-method: POST
+message-body: '{"domains":["uber.com","tesla.com","stripe.com","hackerone.com"],"metadata":{"campaign":"chaos-10m"},"max_per_domain":100000,"parallelism":50,"scheme":"https","priority":1,"ttl_seconds":3600}'
+oidc-service-account-email: scheduler-invoker@mobile-new-pip.iam.gserviceaccount.com
+oidc-token-audience: "${FETCHER_URL}"
+schedule: "*/10 * * * *"
+uri: "${FETCHER_URL}/sync"
