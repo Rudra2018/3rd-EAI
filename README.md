@@ -1,4 +1,4 @@
-# Rudra’s E(AI)
+# 3rd EAI
 
 > Event-driven API/web scanner with automated scope discovery, AI/ML signal integration, and a push-based findings pipeline.
 
