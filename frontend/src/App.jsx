@@ -1,25 +1,52 @@
-import React, { Suspense, lazy } from "react";
-import { Container, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
-import ErrorBoundary from "./components/ErrorBoundary.jsx";
+import React, { useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
+import Navigation from './components/Navigation';
+import Dashboard from './components/Dashboard';
+import URLScanner from './components/URLScanner';
+import PostmanScanner from './components/PostmanScanner';
+import GraphQLScanner from './components/GraphQLScanner';
+import ScanResults from './components/ScanResults';
+import ScanHistory from './components/ScanHistory';
+import './App.css';
 
-const ScanDashboard = lazy(() => import("./components/ScanDashboard.jsx"));
+function App() {
+  const [activeScans, setActiveScans] = useState(new Map());
 
-const theme = createTheme({
-  palette: { mode: "dark", background: { default: "#0b0e13", paper: "#121620" } }
-});
+  const updateScanStatus = (scanId, status) => {
+    setActiveScans(prev => new Map(prev.set(scanId, status)));
+  };
 
-export default function App(){
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <Container maxWidth="lg" sx={{ py: 2 }}>
-        <ErrorBoundary>
-          <Suspense fallback={<div style={{height:240}} />}>
-            <ScanDashboard />
-          </Suspense>
-        </ErrorBoundary>
-      </Container>
-    </ThemeProvider>
+    <Router>
+      <div className="min-h-screen bg-gray-50">
+        <Toaster position="top-right" />
+        <Navigation />
+        
+        <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<Dashboard activeScans={activeScans} />} />
+            <Route 
+              path="/scan/url" 
+              element={<URLScanner onScanStart={updateScanStatus} />} 
+            />
+            <Route 
+              path="/scan/postman" 
+              element={<PostmanScanner onScanStart={updateScanStatus} />} 
+            />
+            <Route 
+              path="/scan/graphql" 
+              element={<GraphQLScanner onScanStart={updateScanStatus} />} 
+            />
+            <Route path="/results/:scanId" element={<ScanResults />} />
+            <Route path="/history" element={<ScanHistory />} />
+          </Routes>
+        </main>
+      </div>
+    </Router>
   );
 }
+
+export default App;
 

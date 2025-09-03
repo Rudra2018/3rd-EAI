@@ -1,4 +1,3 @@
-# ai_test_generator.py
 import os
 import re
 import json
@@ -24,7 +23,6 @@ OPENAI_OK = False
 GEMINI_OK = False
 try:
     import openai
-    # Support both legacy and new clients gracefully
     key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_BETA") or os.getenv("OPENAI_KEY")
     if key:
         openai.api_key = key
@@ -98,7 +96,40 @@ def _guess_content_type(req) -> str:
     if raw.startswith("{"): return "application/json"
     return ""
 
+def _resolve_variables(value, variables):
+    if isinstance(value, str):
+        for var in variables:
+            value = value.replace(f'{{{{{var["key"]}}}}}', var["value"])
+    return value
+
+def _parse_auth(req):
+    auth = req.get("auth")
+    if auth:
+        if auth["type"] == "bearer":
+            return {"Authorization": f"Bearer {auth['bearer'][0]['value']}"}
+        # Add basic, apikey, etc.
+        if auth["type"] == "basic":
+            from base64 import b64encode
+            username = auth["basic"][0]["value"]
+            password = auth["basic"][1]["value"]
+            return {"Authorization": f"Basic {b64encode(f'{username}:{password}'.encode()).decode()}"}
+    return {}
+
+def _parse_body(req):
+    body = req.get("body", {})
+    mode = body.get("mode")
+    if mode == "raw":
+        return body.get("raw")
+    elif mode == "graphql":
+        return json.dumps({"query": body["graphql"]["query"], "variables": body["graphql"]["variables"]})
+    elif mode == "formdata":
+        return {p["key"]: p["value"] for p in body["formdata"] if not p.get("disabled")}  # Handle multipart, ignore disabled
+    elif mode == "urlencoded":
+        return {p["key"]: p["value"] for p in body["urlencoded"] if not p.get("disabled")}
+    return None
+
 def _extract_endpoints_from_collection(col_json: Dict[str, Any]) -> List[Dict[str, Any]]:
+    variables = col_json.get("variable", [])
     items = col_json.get("item") or []
     if not items and isinstance(col_json.get("requests"), list):
         items = [{"name": r.get("name") or r.get("url"), "request": r} for r in col_json["requests"]]
@@ -110,15 +141,20 @@ def _extract_endpoints_from_collection(col_json: Dict[str, Any]) -> List[Dict[st
         if not req:
             continue
         method = (req.get("method") or "GET").upper()
-        url = _url_from_request(req)
+        url = _resolve_variables(_url_from_request(req), variables)
         if not url:
             continue
+        headers = {h["key"]: h["value"] for h in req.get("header", []) if not h.get("disabled")}
+        headers.update(_parse_auth(req))
+        body = _parse_body(req)
         endpoints.append({
             "name": it.get("name") or f"{method} {url}",
             "method": method,
             "url": url,
             "content_type": _guess_content_type(req),
             "is_graphql": (req.get("body") or {}).get("mode") == "graphql" or "/graphql" in (url.lower()),
+            "headers": headers,
+            "body": body
         })
     # dedupe
     seen = set(); uniq = []
@@ -129,7 +165,6 @@ def _extract_endpoints_from_collection(col_json: Dict[str, Any]) -> List[Dict[st
     return uniq
 
 def _complexity_score(endpoints: List[Dict[str, Any]]) -> int:
-    # Simple heuristic: endpoints count + weight for mutating methods + presence of admin/payments/graphql
     score = len(endpoints)
     for ep in endpoints:
         m = ep.get("method","GET").upper()
@@ -207,7 +242,6 @@ class AITestCaseGenerator:
         # GraphQL specialized cases
         if is_gql:
             tests.extend(self._graphql_tests(url, ct))
-            # Also add generic HTTP hardening around /graphql
             tests.extend(self._generic_write_tamper(url, method, ct))
             return self._limit_for_speed(name, tests)
 
@@ -228,8 +262,6 @@ class AITestCaseGenerator:
                 pass
 
         return self._limit_for_speed(name, tests)
-
-    # ---- Feature blocks ----
 
     def _graphql_tests(self, url, ct) -> List[Dict[str, Any]]:
         tests = []
@@ -269,6 +301,14 @@ class AITestCaseGenerator:
             payload=json.dumps({"query":"{ me { id email } }", "variables":{}}),
             tags=["graphql","broken-auth"], prio=_prio("brokenauth")
         ))
+        # Add more: Overly deep queries for DoS
+        deep_query = "query { user { friends { friends { name } } } }"
+        tests.append(self._tc(
+            "GraphQL Depth Attack",
+            "POST", url, _base_headers("application/json"),
+            payload=json.dumps({"query": deep_query}),
+            tags=["graphql","dos"], prio="P3"
+        ))
         return tests
 
     def _auth_bypass_tests(self, url, method, ct, tags) -> List[Dict[str, Any]]:
@@ -281,6 +321,9 @@ class AITestCaseGenerator:
             # Cookie strip
             tests.append(self._tc("Strip Cookies", method, url, headers={"Cookie":""}, payload=None,
                                   tags=["auth","broken-auth"], prio=_prio("brokenauth")))
+            # Role escalation
+            tests.append(self._tc("Role Escalation", method, url, headers={"X-Role": "admin"},
+                                  payload=None, tags=["auth","broken-auth"], prio=_prio("brokenauth")))
         return tests
 
     def _idor_bola_tests(self, url, method, ct) -> List[Dict[str, Any]]:
@@ -288,204 +331,151 @@ class AITestCaseGenerator:
         # Path id like /users/123 or /orders/9/items/1
         ids = re.findall(r"/(\d+)(?=/|$|\?)", url)
         if ids:
-            for raw in ids[:2]:
-                try:
-                    n = int(raw)
-                    for probe in (n+1, max(1, n-1)):
-                        tampered = url.replace(f"/{raw}", f"/{probe}", 1)
-                        tests.append(self._tc(
-                            f"BOLA/IDOR path probe ({raw}->{probe})",
-                            "GET" if method == "GET" else method, tampered,
-                            headers={}, payload=None, tags=["idor","authz"], prio=_prio("idor")
-                        ))
-                except Exception:
-                    continue
-        # Query id=? pattern
-        if re.search(r"[?&](id|user_id|account_id|order_id)=", url, re.I):
-            tests.append(self._tc("BOLA/IDOR query probe (+1)", method,
-                                  re.sub(r"((?:^|[?&])(id|user_id|account_id|order_id)=)(\d+)",
-                                         lambda m: f"{m.group(1)}{int(m.group(3))+1}", url, count=1, flags=re.I),
-                                  headers={}, payload=None, tags=["idor","authz"], prio=_prio("idor")))
+            for raw in ids[:2]:  # Limit to first 2 IDs
+                num = int(raw)
+                tests.append(self._tc(
+                    f"IDOR Low ID {num-1}",
+                    method, url.replace(raw, str(num-1)), _base_headers(ct),
+                    payload=None, tags=["idor","bola"], prio=_prio("idor")
+                ))
+                tests.append(self._tc(
+                    f"IDOR High ID {BIG_NUMBER}",
+                    method, url.replace(raw, str(BIG_NUMBER)), _base_headers(ct),
+                    payload=None, tags=["idor","bola"], prio=_prio("idor")
+                ))
+                tests.append(self._tc(
+                    f"IDOR GUID Swap",
+                    method, url.replace(raw, "00000000-0000-0000-0000-000000000000"), _base_headers(ct),
+                    payload=None, tags=["idor","bola"], prio=_prio("idor")
+                ))
+        # Query param IDs
+        query_ids = re.findall(r"(\w+)=(\d+)", url)
+        for key, val in query_ids[:2]:
+            tests.append(self._tc(
+                f"IDOR Query Low {key}",
+                method, re.sub(f"{key}=\\d+", f"{key}={int(val)-1}", url), _base_headers(ct),
+                payload=None, tags=["idor"], prio=_prio("idor")
+            ))
         return tests
 
     def _injection_tests(self, url, method, ct, tags) -> List[Dict[str, Any]]:
         tests = []
-        # SQLi in query
-        if "?" in url and method in ("GET","DELETE"):
-            for inj in SQLI_STRINGS[:2] + (TIME_SINKS[:1] if not FAST_MODE else []):
-                crafted = re.sub(r"=([^&]+)", lambda m: "="+inj, url, count=1)
-                tests.append(self._tc(f"SQLi param probe ({inj[:8]}…)", method, crafted, {}, None,
-                                      tags=["sqli"], prio=_prio("sqli")))
-        # JSON body injections for write methods
-        if method in ("POST","PUT","PATCH"):
-            # NoSQLi
-            tests.append(self._tc("NoSQLi JSON object", method, url, _base_headers("application/json"),
-                                  payload=json.dumps({"username": {"$ne": None}, "password": {"$ne": ""}}),
-                                  tags=["nosqli"], prio=_prio("nosqli")))
-            # SQLi fields
-            tests.append(self._tc("SQLi JSON string", method, url, _base_headers("application/json"),
-                                  payload=json.dumps({"q": SQLI_STRINGS[0]}),
-                                  tags=["sqli"], prio=_prio("sqli")))
-            if not FAST_MODE:
-                tests.append(self._tc("Time-based SQLi JSON", method, url, _base_headers("application/json"),
-                                      payload=json.dumps({"q": TIME_SINKS[0]}),
-                                      tags=["sqli"], prio=_prio("sqli")))
-            # Mass assignment (role escalation)
-            tests.append(self._tc("Mass-assignment role escalation", method, url, _base_headers("application/json"),
-                                  payload=json.dumps({"role": "admin", "is_admin": True, "isSuperuser": True}),
-                                  tags=["mass-assignment"], prio=_prio("mass-assignment")))
+        # SQLi in URL params
+        for sqli in SQLI_STRINGS:
+            tests.append(self._tc(
+                f"SQLi {sqli[:10]}...",
+                method, f"{url}?q={sqli}", _base_headers(ct),
+                payload=None, tags=["sqli","injection"], prio=_prio("sqli")
+            ))
+        # Time-based blind
+        for sink in TIME_SINKS:
+            tests.append(self._tc(
+                f"Blind SQLi {sink[:10]}...",
+                method, f"{url}?q={sink}", _base_headers(ct),
+                payload=None, tags=["sqli","blind"], prio=_prio("sqli")
+            ))
+        # NoSQLi for JSON APIs
+        if "json" in ct:
+            for nosql in NOSQLI:
+                tests.append(self._tc(
+                    "NoSQLi",
+                    method, url, _base_headers(ct),
+                    payload=json.dumps(nosql), tags=["nosqli","injection"], prio=_prio("nosqli")
+                ))
+        # XSS
+        for xss in XSS_STRS:
+            tests.append(self._tc(
+                f"XSS {xss[:10]}...",
+                method, f"{url}?input={xss}", _base_headers(ct),
+                payload=None, tags=["xss","injection"], prio=_prio("xss")
+            ))
+        # SSRF
+        for ssrf in SSRF_URLS:
+            tests.append(self._tc(
+                f"SSRF {ssrf[:10]}...",
+                method, f"{url}?url={ssrf}", _base_headers(ct),
+                payload=None, tags=["ssrf"], prio=_prio("ssrf")
+            ))
         return tests
 
     def _file_path_tests(self, url, method, ct, tags) -> List[Dict[str, Any]]:
         tests = []
-        # SSRF hints by param names
-        if re.search(r"(url|uri|callback|redirect|webhook|feed|image|avatar)=", url, re.I) or method in ("POST","PUT","PATCH"):
-            for u in (SSRF_URLS[:1] if FAST_MODE else SSRF_URLS):
-                if method in ("POST","PUT","PATCH"):
-                    tests.append(self._tc("SSRF JSON url", method, url, _base_headers("application/json"),
-                                          payload=json.dumps({"url": u}), tags=["ssrf"], prio=_prio("ssrf")))
-                else:
-                    crafted = re.sub(r"((?:^|[?&])(url|uri|callback|redirect|webhook|feed|image|avatar)=)[^&]*",
-                                     lambda m: m.group(1)+u, url, count=1, flags=re.I)
-                    tests.append(self._tc("SSRF query url", method, crafted, {}, None, tags=["ssrf"], prio=_prio("ssrf")))
-        # Path traversal on filenames
-        if re.search(r"(file|path|dir)=", url, re.I) or method in ("POST","PUT","PATCH"):
-            tr = PATH_TRAVERSAL[0] if FAST_MODE else PATH_TRAVERSAL[0:2]
-            for p in tr:
-                if method in ("POST","PUT","PATCH"):
-                    tests.append(self._tc("Path traversal body", method, url, _base_headers("application/json"),
-                                          payload=json.dumps({"path": p}), tags=["sensitive"], prio=_prio("sensitive")))
-                else:
-                    crafted = re.sub(r"((?:^|[?&])(file|path|dir)=)[^&]*",
-                                     lambda m: m.group(1)+p, url, count=1, flags=re.I)
-                    tests.append(self._tc("Path traversal query", method, crafted, {}, None, tags=["sensitive"], prio=_prio("sensitive")))
+        if "file" in url.lower() or "path" in url.lower():
+            for trav in PATH_TRAVERSAL:
+                tests.append(self._tc(
+                    f"Path Traversal {trav[:10]}...",
+                    method, f"{url}?file={trav}", _base_headers(ct),
+                    payload=None, tags=["lfi","rfi"], prio=_prio("xxe")  # Similar priority
+                ))
         return tests
 
     def _open_redirect_csrf_tests(self, url, method, ct, tags) -> List[Dict[str, Any]]:
         tests = []
-        # Open redirect
-        if re.search(r"(redirect|return|next|destination|continue|url)=", url, re.I):
-            crafted = re.sub(r"((?:^|[?&])(redirect|return|next|destination|continue|url)=)[^&]*",
-                             lambda m: m.group(1)+OPEN_REDIRECTS[0], url, count=1, flags=re.I)
-            tests.append(self._tc("Open Redirect", "GET", crafted, {}, None, tags=["open-redirect"], prio=_prio("open-redirect")))
-        # CSRF (write without auth headers)
-        if method in ("POST","PUT","PATCH","DELETE"):
-            tests.append(self._tc("CSRF (no token, write verb)", method, url, headers={}, payload=None,
-                                  tags=["csrf"], prio=_prio("csrf")))
+        if "redirect" in url.lower() or "next" in url.lower():
+            for redir in OPEN_REDIRECTS:
+                tests.append(self._tc(
+                    f"Open Redirect {redir[:10]}...",
+                    method, f"{url}?next={redir}", _base_headers(ct),
+                    payload=None, tags=["open-redirect"], prio=_prio("open-redirect")
+                ))
+        # CSRF: Invalid/missing token
+        tests.append(self._tc(
+            "CSRF Missing Token",
+            method, url, headers={"X-CSRF-Token": ""}, payload=None,
+            tags=["csrf"], prio=_prio("csrf")
+        ))
         return tests
 
     def _generic_write_tamper(self, url, method, ct) -> List[Dict[str, Any]]:
         tests = []
-        # Method tampering (HEAD/OPTIONS/GET on POST)
-        if method == "POST":
-            tests.append(self._tc("Verb tamper: GET instead of POST", "GET", url, {}, None, tags=["hardening"], prio="P3"))
-            tests.append(self._tc("Verb tamper: HEAD instead of POST", "HEAD", url, {}, None, tags=["hardening"], prio="P3"))
-        # Numeric overflow / negative amount for payments
-        if re.search(r"(amount|price|qty|quantity|total)=", url, re.I):
-            crafted = re.sub(r"((?:^|[?&])(amount|price|qty|quantity|total)=)[^&]*",
-                             lambda m: m.group(1)+str(BIG_NUMBER), url, count=1, flags=re.I)
-            tests.append(self._tc("Business logic: huge amount", "GET", crafted, {}, None, tags=["sensitive"], prio="P2"))
-        if method in ("POST","PUT","PATCH"):
-            tests.append(self._tc("Business logic: negative amount", method, url, _base_headers("application/json"),
-                                  payload=json.dumps({"amount": -100}), tags=["sensitive"], prio="P2"))
+        if method in ("POST", "PUT", "PATCH"):
+            # Mass assignment
+            tamper_payload = {"role": "admin", "is_admin": True}
+            tests.append(self._tc(
+                "Mass Assignment",
+                method, url, _base_headers("application/json"),
+                payload=json.dumps(tamper_payload), tags=["mass-assignment"], prio=_prio("mass-assignment")
+            ))
+            # CORS misconfig
+            tests.append(self._tc(
+                "CORS Preflight",
+                "OPTIONS", url, headers={"Origin": "http://evil.com"}, payload=None,
+                tags=["cors"], prio=_prio("cors")
+            ))
         return tests
 
-    # ---- Optional LLM augmentation ----
-    def _llm_aug(self, url, method, ct, tags) -> List[Dict[str, Any]]:
-        prompt = (
-            "Generate 3 high-impact API security probes for this endpoint.\n"
-            f"Endpoint: {method} {url}\n"
-            f"Context tags: {', '.join(tags)}\n"
-            "Return a compact JSON array of objects with: test_name, method, url, headers (dict), payload (string or null), priority_hint (P1|P2|P3), tags (array).\n"
-            "Keep it concise and safe. No explanations."
-        )
-        content = None
-        if OPENAI_OK:
-            try:
-                # Support both Chat Completions and Responses APIs; keep compatibility broad
-                resp = openai.ChatCompletion.create(
-                    model=os.getenv("OPENAI_MODEL","gpt-4o-mini"),
-                    messages=[{"role":"user","content":prompt}],
-                    temperature=0.2,
-                    max_tokens=400
-                )
-                content = resp.choices[0].message["content"]
-            except Exception:
-                content = None
-        if content is None and GEMINI_OK:
-            try:
-                model = genai.GenerativeModel(os.getenv("GEMINI_MODEL","gemini-1.5-pro"))
-                resp = model.generate_content(prompt)
-                content = resp.text
-            except Exception:
-                content = None
-
-        out = []
-        if content:
-            try:
-                # Extract JSON array
-                jtxt = content.strip()
-                start = jtxt.find("["); end = jtxt.rfind("]")
-                if start >= 0 and end > start:
-                    data = json.loads(jtxt[start:end+1])
-                    for o in data[:3]:
-                        headers = o.get("headers") or {}
-                        out.append(self._tc(
-                            o.get("test_name","LLM case"),
-                            o.get("method", method), o.get("url", url),
-                            headers, o.get("payload"),
-                            tags=list(set((o.get("tags") or []) + ["llm-aug"])),
-                            prio=o.get("priority_hint","P3")
-                        ))
-            except Exception:
-                pass
-        return out
-
-    # ---- Utilities ----
-
-    def _classify(self, url) -> List[str]:
-        s = url.lower()
+    def _classify(self, url: str) -> List[str]:
         tags = []
-        if any(k in s for k in ("/auth","/login","/token","/oauth","/sessions")): tags.append("auth")
-        if any(k in s for k in ("/admin","/internal","/credentials")): tags.append("admin")
-        if any(k in s for k in ("/payment","/transfer","/payout","/withdraw")): tags.append("payments")
-        if "/graphql" in s: tags.append("graphql")
-        if any(k in s for k in ("/user","/account","/profile")): tags.append("user")
+        if "/auth" in url or "/login" in url:
+            tags.append("auth")
+        if "/user" in url or "/profile" in url:
+            tags.append("user")
+        # Add more classifications
         return tags
 
-    def _tc(self, test_name, method, url, headers, payload, tags, prio) -> Dict[str, Any]:
-        # Normalize headers to dict
-        hdict = {}
-        if isinstance(headers, dict):
-            hdict = deepcopy(headers)
-        elif isinstance(headers, list):
-            for h in headers:
-                k = h.get("key"); v = h.get("value")
-                if k: hdict[k] = v
-        tc = {
-            "test_name": test_name,
-            "method": method.upper(),
+    def _tc(self, name: str, method: str, url: str, headers: Dict, payload: Any, tags: List[str], prio: str) -> Dict[str, Any]:
+        return {
+            "test_name": name,
+            "method": method,
             "url": url,
-            "endpoint": url,
-            "headers": hdict,
+            "headers": headers,
             "payload": payload,
-            "tags": list(dict.fromkeys(tags or [])),
+            "tags": tags,
             "priority_hint": prio
         }
-        return tc
 
-    def _limit_for_speed(self, ep_name: str, tests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Keep quality high but cap volume for speed. In FAST_MODE ~8-10 per endpoint.
-        Otherwise ~12-16 with diversity preserved.
-        """
-        if not tests:
-            return []
-        # Always prioritize P1>P2>P3 and unique tag coverage
-        order = {"P1":0,"P2":1,"P3":2}
-        tests = sorted(tests, key=lambda t: (order.get(t.get("priority_hint","P3"), 2), len(t.get("tags") or [])))
-        cap = 10 if FAST_MODE else 16
-        trimmed = tests[:cap]
-        log.debug(f"AI TestGen: {len(trimmed)}/{len(tests)} kept for '{ep_name}' (FAST_MODE={FAST_MODE})")
-        return trimmed
+    def _limit_for_speed(self, name: str, tests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if FAST_MODE:
+            return tests[:5]  # Limit for speed
+        return tests
 
+    def _llm_aug(self, url: str, method: str, ct: str, tags: List[str]) -> List[Dict[str, Any]]:
+        prompt = f"Generate 3 additional security test cases for {method} {url} with tags {tags}"
+        if OPENAI_OK:
+            response = openai.ChatCompletion.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
+            return json.loads(response.choices[0].message.content)  # Assume JSON output
+        elif GEMINI_OK:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
+            return json.loads(response.text)
+        return []

@@ -1,0 +1,45 @@
+{
+  "value": {
+    "target_analysis": {
+      "error": "AI analysis failed"
+    },
+    "attack_vectors": [],
+    "payload_recommendations": [],
+    "risk_assessment": {
+      "risk_level": "Low",
+      "risk_score": 2,
+      "risk_factors": [],
+      "business_criticality": "medium",
+      "vulnerability_exposure": 0
+    },
+    "testing_timeline": {
+      "total_estimated_hours": 0.0,
+      "phases": [
+        {
+          "name": "Initial Assessment",
+          "duration_hours": 0.0,
+          "vectors": 0,
+          "focus": "High-priority vulnerabilities"
+        },
+        {
+          "name": "Comprehensive Testing",
+          "duration_hours": 0.0,
+          "vectors": 0,
+          "focus": "Medium-priority vulnerabilities"
+        },
+        {
+          "name": "Edge Cases",
+          "duration_hours": 0.0,
+          "vectors": 0,
+          "focus": "Low-priority and edge case testing"
+        }
+      ],
+      "milestones": []
+    },
+    "success_metrics": [
+      "Vulnerability detection rate > 80%",
+      "False positive rate < 15%",
+      "Complete coverage of high-priority attack vectors"
+    ],
+    "ai_confidence": 0,
+    "generated_at": 

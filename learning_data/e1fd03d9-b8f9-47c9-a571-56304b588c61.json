@@ -1,0 +1,104 @@
+{
+  "url": "https://api.github.com",
+  "results": {
+    "scan_id": "8cfd25e2-4c12-4cd1-94e8-4d228de66c0e",
+    "url": "https://api.github.com",
+    "scan_type": "comprehensive",
+    "started_at": "2025-09-03T06:38:06.666970",
+    "completed_at": "2025-09-03T06:38:06.667013",
+    "status": "completed",
+    "vulnerabilities": [
+      {
+        "type": "ai_detected_anomaly",
+        "severity": "low",
+        "description": "AI detected potential security anomaly",
+        "url": "https://api.github.com",
+        "ai_confidence": 0.6
+      }
+    ],
+    "summary": {
+      "total_tests": 6,
+      "vulnerabilities_found": 1,
+      "high_risk": 0,
+      "medium_risk": 0,
+      "low_risk": 1
+    },
+    "ai_enhanced": true,
+    "ml_enhanced": true,
+    "generated_test_cases": {
+      "total": 18,
+      "sample_cases": [
+        {
+          "test_name": "No-Token Request",
+          "method": "GET",
+          "url": "https://api.github.com",
+          "headers": {},
+          "payload": null,
+          "tags": [
+            "auth",
+            "broken-auth"
+          ],
+          "priority_hint": "P2"
+        },
+        {
+          "test_name": "Invalid Token",
+          "method": "GET",
+          "url": "https://api.github.com",
+          "headers": {
+            "Authorization": "Bearer invalid.invalid"
+          },
+          "payload": null,
+          "tags": [
+            "auth",
+            "broken-auth"
+          ],
+          "priority_hint": "P2"
+        },
+        {
+          "test_name": "Strip Cookies",
+          "method": "GET",
+          "url": "https://api.github.com",
+          "headers": {
+            "Cookie": ""
+          },
+          "payload": null,
+          "tags": [
+            "auth",
+            "broken-auth"
+          ],
+          "priority_hint": "P2"
+        },
+        {
+          "test_name": "Role Escalation",
+          "method": "GET",
+          "url": "https://api.github.com",
+          "headers": {
+            "X-Role": "admin"
+          },
+          "payload": null,
+          "tags": [
+            "auth",
+            "broken-auth"
+          ],
+          "priority_hint": "P2"
+        },
+        {
+          "test_name": "SQLi ' OR '1'='...",
+          "method": "GET",
+          "url": "https://api.github.com?q=' OR '1'='1",
+          "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          "payload": null,
+          "tags": [
+            "sqli",
+            "injection"
+          ],
+          "priority_hint": "P1"
+        }
+      ]
+    }
+  },
+  "timestamp": "2025-09-03T12:08:06.667886"
+}

@@ -1,7 +1,15 @@
-import React from "react";
-export function Card({ className = "", ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={`rounded-2xl border bg-white shadow ${className}`} {...props} />;
-}
-export function CardContent({ className = "", ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={`p-4 md:p-6 ${className}`} {...props} />;
+// card.tsx
+import React from 'react';
+import { twMerge } from 'tailwind-merge';
+
+export function Card({ className, ...props }: React.ComponentPropsWithoutRef<'div'>) {
+  return (
+    <div
+      className={twMerge(
+        'bg-white rounded-lg shadow-sm border border-gray-200 dark:bg-gray-800 dark:border-gray-700',
+        className
+      )}
+      {...props}
+    />
+  );
 }

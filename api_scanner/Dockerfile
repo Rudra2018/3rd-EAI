@@ -1,27 +1,24 @@
-# Use a slim Python 3.11 image as the base.
+# api_scanner/Dockerfile
+# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
-# Set environment variables to optimize Python's performance in a container.
-# PYTHONUNBUFFERED ensures logs are streamed to the console in real-time.
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8080 \
+    APP_MODULE=api_scanner.server.main:app
 
-# Set the working directory inside the container to /app.
-# All subsequent commands will run from this directory.
 WORKDIR /app
 
-# Copy the requirements file into the container.
-# This allows pip to install dependencies before the rest of the code is copied,
-# which optimizes Docker's layer caching.
+# Install deps for this subfolder context
+# (This refers to api_scanner/requirements.txt because build context is api_scanner/)
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+ && pip install --no-cache-dir uvicorn[standard]
 
-# Install the Python dependencies.
-# The --no-cache-dir flag reduces the image size by not storing the pip cache.
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the entire project from the local directory into the /app directory in the container.
+# Copy the rest of the subfolder
 COPY . .
 
-# The `start.sh` script is the main entrypoint for the application.
-# It handles diagnostics and then starts the Uvicorn server.
-CMD ["/bin/sh", "start.sh"]
+# Bind to 0.0.0.0:$PORT and rely on APP_MODULE (override-able at deploy time)
+CMD ["bash", "-lc", "exec uvicorn ${APP_MODULE} --host 0.0.0.0 --port ${PORT}"]
+

@@ -1,316 +1,264 @@
-# services/scan_worker.py
+from __future__ import annotations
+
+import asyncio
 import base64
 import json
 import logging
 import os
-from typing import Any, Dict, Callable, Optional
+import time
+from typing import Any, Dict, List, Optional, Callable
 from urllib.parse import urlparse
 
 import requests
-from fastapi import FastAPI, Request, Response, HTTPException
-from google.cloud import pubsub_v1
+from fastapi import FastAPI, Request, Response
 
-# ---------------- Env ----------------
-PROJECT_ID = os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-CURATED_TOPIC = os.getenv("TOPIC_FINDINGS_CURATED", "findings.curated")
-
-# ---------------- Logger ----------------
+# Logging
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s [scan-worker] %(message)s",
 )
+log = logging.getLogger("scan-worker")
 
-# ---------------- Engine (optional) ----------------
+app = FastAPI(title="API Scanner Worker", version="2.0.0")
+
+# Configuration
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT")
+FINDINGS_TOPIC = os.getenv("PUBSUB_FINDINGS_TOPIC", "vuln-findings-clean")
+
+# Pub/Sub Setup
+try:
+    from google.cloud import pubsub_v1
+    _publisher = pubsub_v1.PublisherClient()
+    HAS_PUBSUB = True
+except ImportError:
+    _publisher = None
+    HAS_PUBSUB = False
+    log.warning("Pub/Sub client not available")
+
+# Advanced Scanner Engine
 ENGINE_AVAILABLE = False
 try:
-    from engine.scanner_engine import ScannerEngine  # type: ignore
+    from api_scanner.engine.scanner_engine_fixed import ScannerEngine
+    from api_scanner.ai.ai_vulnerability_detector import AIVulnerabilityDetector
+    from api_scanner.core.context import Target, ScanContext
+    from api_scanner.utils.vrt import map_vrt_from_context
     ENGINE_AVAILABLE = True
+    log.info("Advanced scanning engine loaded successfully")
 except Exception as e:
-    logging.warning("ScannerEngine not available, falling back to lightweight checks: %s", e)
+    log.warning(f"Advanced scanning engine not available: {e}")
+    
+    # Fallback classes
+    class ScannerEngine:
+        def __init__(self, ctx): pass
+        async def run(self): return []
+    
+    class AIVulnerabilityDetector:
+        def analyze(self, result): return []
+    
+    def map_vrt_from_context(ctx):
+        return {"vrt_category": "API - Other"}
 
-# ---------------- Pub/Sub Publisher ----------------
-_publisher: Optional[pubsub_v1.PublisherClient] = None
-
-
-def publisher() -> pubsub_v1.PublisherClient:
-    global _publisher
-    if _publisher is None:
-        _publisher = pubsub_v1.PublisherClient()
-    return _publisher
-
-
-def publish_curated(finding: Dict[str, Any]) -> None:
-    if not PROJECT_ID:
-        logging.error("PROJECT_ID not set; cannot publish curated finding")
+def publish_finding(finding: Dict[str, Any]) -> None:
+    """Publish finding to Pub/Sub topic."""
+    if not HAS_PUBSUB or not PROJECT_ID or not _publisher:
+        log.warning("Pub/Sub not configured - skipping finding publication")
         return
-    topic_path = publisher().topic_path(PROJECT_ID, CURATED_TOPIC)
-    data = json.dumps(finding).encode("utf-8")
-    publisher().publish(topic_path, data=data)
+    
+    try:
+        topic_path = _publisher.topic_path(PROJECT_ID, FINDINGS_TOPIC)
+        clean_finding = {
+            "scan_id": str(finding.get("scan_id", "")),
+            "program": str(finding.get("program", "")),
+            "scope_url": str(finding.get("scope_url", "")),
+            "analysis_title": str(finding.get("analysis_title", "")),
+            "analysis_severity": str(finding.get("analysis_severity", "")),
+            "vrt_category": str(finding.get("vrt_category", "")),
+            "confidence": str(finding.get("confidence", "0.7")),
+            "recommended_fix": str(finding.get("recommended_fix", "")),
+            "evidence": str(finding.get("evidence", "")),
+            "raw_event": str(finding.get("raw_event", "")),
+            "created_at": str(finding.get("created_at", ""))
+        }
+        
+        data = json.dumps(clean_finding, ensure_ascii=False).encode("utf-8")
+        future = _publisher.publish(topic_path, data=data)
+        future.result(timeout=10)
+        log.info(f"Published finding: {finding.get('analysis_title', 'Unknown')}")
+    except Exception as e:
+        log.error(f"Failed to publish finding: {e}")
 
-# ---------------- Handlers ----------------
-def handle_http(url: str, meta: Dict[str, Any]) -> None:
-    """
-    HTTP/HTTPS entrypoint. If the real engine is present, use it.
-    Otherwise do a light probe so the pipeline still emits a finding.
-    """
-    program = meta.get("program") or (urlparse(url).hostname or "http")
-    scan_id = meta.get("scan_id")
-
-    if ENGINE_AVAILABLE:
-        try:
-            engine = ScannerEngine()
-            findings = engine.scan_url(url)  # expected to return iterable[dict]
-            for f in findings or []:
-                curated = {
-                    "program": program,
-                    "scope_url": url,
-                    "analysis": {
-                        "title": f.get("title", "Finding"),
-                        "vrt_category": f.get("vrt_category", "UNMAPPED"),
-                        "severity": f.get("severity", "medium"),
-                        "confidence": f.get("confidence", 0.6),
-                        "recommended_fix": f.get("recommended_fix", ""),
-                    },
-                    "scan_id": scan_id,
-                    "source": meta.get("source") or "http",
-                }
-                publish_curated(curated)
-        except Exception as e:
-            logging.exception("Engine HTTP scan failed for %s: %s", url, e)
-    else:
-        try:
-            r = requests.get(url, timeout=10, allow_redirects=True)
-            sev = "low" if r.status_code < 400 else "medium"
-            curated = {
-                "program": program,
-                "scope_url": url,
-                "analysis": {
-                    "title": f"HTTP probe: {r.status_code}",
-                    "vrt_category": "INFO/HTTP-PROBE",
-                    "severity": sev,
-                    "confidence": 0.5,
-                    "recommended_fix": "",
-                },
-                "scan_id": scan_id,
-                "source": meta.get("source") or "http",
+def smoke_reachability(url: str) -> List[Dict[str, Any]]:
+    """Basic reachability check."""
+    try:
+        headers = {"User-Agent": "API-Scanner/2.0"}
+        r = requests.get(url, timeout=(5, 10), allow_redirects=True, headers=headers)
+        return [{
+            "title": "API Endpoint Reachability",
+            "severity": "info",
+            "evidence": {
+                "status_code": r.status_code,
+                "final_url": str(r.url),
+                "response_time_ms": int(r.elapsed.total_seconds() * 1000),
+                "content_length": len(r.content) if r.content else 0,
+                "headers": dict(list(r.headers.items())[:10])  # Limit headers
             }
-            publish_curated(curated)
-        except Exception as e:
-            logging.warning("HTTP probe failed for %s: %s", url, e)
-
-
-def handle_openapi(src: str, meta: Dict[str, Any]) -> None:
-    try:
-        from importers.openapi_parser import OpenAPIParser  # type: ignore
-
-        program = meta.get("program") or (urlparse(src).hostname or "openapi")
-        parser = OpenAPIParser()
-        apis = parser.parse(src)
-
-        if ENGINE_AVAILABLE:
-            engine = ScannerEngine()
-            for api in apis or []:
-                for ep in api.get("endpoints", []):
-                    for finding in engine.scan_api_endpoint(ep) or []:
-                        curated = {
-                            "program": program,
-                            "scope_url": ep.get("url"),
-                            "analysis": {
-                                "title": finding.get("title", "API finding"),
-                                "vrt_category": finding.get("vrt_category", "UNMAPPED"),
-                                "severity": finding.get("severity", "medium"),
-                                "confidence": finding.get("confidence", 0.6),
-                                "recommended_fix": finding.get("recommended_fix", ""),
-                            },
-                            "scan_id": meta.get("scan_id"),
-                            "source": meta.get("source") or "openapi",
-                        }
-                        publish_curated(curated)
+        }]
     except Exception as e:
-        logging.warning("OpenAPI handler error for %s: %s", src, e)
+        return [{
+            "title": "API Endpoint Unreachable",
+            "severity": "medium", 
+            "evidence": {"error": str(e), "url": url}
+        }]
 
+async def run_full_scan(url: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Run comprehensive security scan with AI-powered detection."""
+    findings = []
+    
+    # Always include reachability check
+    findings.extend(smoke_reachability(url))
+    
+    if not ENGINE_AVAILABLE:
+        log.info(f"Advanced scanning unavailable for {url}")
+        return findings
 
-def handle_postman(src: str, meta: Dict[str, Any]) -> None:
+    log.info(f"Starting comprehensive scan for: {url}")
     try:
-        from importers.postman_parser import PostmanParser  # type: ignore
+        # Create scan context
+        targets = [Target(method="GET", url=url, headers={}, body=None)]
+        ctx = ScanContext(targets=targets)
+        
+        # Run scanner engine
+        engine = ScannerEngine(ctx)
+        raw_results = await engine.run()
+        
+        # Analyze with AI detector
+        detector = AIVulnerabilityDetector()
+        for result in raw_results:
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    log.warning("Skipping malformed scan result")
+                    continue
 
-        program = meta.get("program") or (urlparse(src).hostname or "postman")
-        parser = PostmanParser()
-        colls = parser.parse(src)
-
-        if ENGINE_AVAILABLE:
-            engine = ScannerEngine()
-            for c in colls or []:
-                for req in c.get("requests", []):
-                    for finding in engine.scan_api_request(req) or []:
-                        curated = {
-                            "program": program,
-                            "scope_url": req.get("url"),
-                            "analysis": {
-                                "title": finding.get("title", "API finding"),
-                                "vrt_category": finding.get("vrt_category", "UNMAPPED"),
-                                "severity": finding.get("severity", "medium"),
-                                "confidence": finding.get("confidence", 0.6),
-                                "recommended_fix": finding.get("recommended_fix", ""),
-                            },
-                            "scan_id": meta.get("scan_id"),
-                            "source": meta.get("source") or "postman",
-                        }
-                        publish_curated(curated)
+            analyzed_findings = detector.analyze(result)
+            findings.extend([f.__dict__ for f in analyzed_findings])
+        
+        log.info(f"Comprehensive scan completed for {url}: {len(findings)} findings")
+        return findings
+        
     except Exception as e:
-        logging.warning("Postman handler error for %s: %s", src, e)
+        log.exception(f"Advanced scan failed for {url}: {e}")
+        return findings
 
-
-def handle_graphql(src: str, meta: Dict[str, Any]) -> None:
-    try:
-        from importers.graphql_importer import GraphQLImporter  # type: ignore
-
-        program = meta.get("program") or (urlparse(src).hostname or "graphql")
-        imp = GraphQLImporter()
-        schema = imp.load(src)
-
-        if ENGINE_AVAILABLE:
-            engine = ScannerEngine()
-            for finding in engine.scan_graphql_schema(schema) or []:
-                curated = {
-                    "program": program,
-                    "scope_url": src,
-                    "analysis": {
-                        "title": finding.get("title", "GraphQL finding"),
-                        "vrt_category": finding.get("vrt_category", "UNMAPPED"),
-                        "severity": finding.get("severity", "medium"),
-                        "confidence": finding.get("confidence", 0.6),
-                        "recommended_fix": finding.get("recommended_fix", ""),
-                    },
-                    "scan_id": meta.get("scan_id"),
-                    "source": meta.get("source") or "graphql",
-                }
-                publish_curated(curated)
-    except Exception as e:
-        logging.warning("GraphQL handler error for %s: %s", src, e)
-
-
-SCAN_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {
-    "http": handle_http,
-    "https": handle_http,
-    "openapi": handle_openapi,
-    "postman": handle_postman,
-    "graphql": handle_graphql,
+SCAN_HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], List[Dict[str, Any]]]] = {
+    "http": run_full_scan,
+    "https": run_full_scan,
 }
 
-# ---------------- FastAPI ----------------
-app = FastAPI()
+async def process_scan_request(payload: Dict[str, Any]) -> None:
+    """Process a scan request with advanced capabilities."""
+    url = payload.get("url") or payload.get("source_url") or payload.get("target_url")
+    scan_id = payload.get("scan_id") or payload.get("id")
+    metadata = payload.get("metadata", {})
+    priority = payload.get("priority", 1)
 
-
-@app.get("/healthz")
-def healthz():
-    return {"ok": True, "handlers": list(SCAN_HANDLERS.keys())}
-
-
-def _dispatch_scan(url_or_src: str, scan_type: Optional[str], meta: Dict[str, Any]) -> None:
-    """
-    Common dispatcher used by both /scan (direct JSON) and /pubsub/push (envelope).
-    Resolves handler key from explicit scan_type or URL scheme.
-    """
-    if scan_type:
-        key = scan_type.lower()
-    else:
-        key = (urlparse(url_or_src).scheme or "").lower() or "http"
-    handler = SCAN_HANDLERS.get(key)
-    if not handler:
-        logging.warning("scan_fn_missing key=%s url=%s", key, url_or_src)
+    if not url or not scan_id:
+        log.warning(f"Invalid payload - missing url or scan_id. Keys: {list(payload.keys())}")
         return
-    handler(url_or_src, meta)
 
+    parsed_url = urlparse(url)
+    scan_type = parsed_url.scheme.lower() if parsed_url.scheme else "https"
+    
+    handler = SCAN_HANDLERS.get(scan_type)
+    if not handler:
+        log.warning(f"No handler for scheme: {scan_type}")
+        return
 
-def _extract_payload(envelope: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Accepts Pub/Sub push envelope and returns the decoded message dict.
-    Supports both Cloud Run push and test cURL payloads.
-    """
-    msg = envelope.get("message") or envelope  # tolerate direct body
-    data_b64 = msg.get("data")
-    if not data_b64:
-        return {}
+    log.info(f"Processing scan_id={scan_id}, url={url}, priority={priority}")
+    
     try:
-        return json.loads(base64.b64decode(data_b64).decode("utf-8"))
+        findings = await handler(url, metadata)
+        
+        for finding in findings:
+            curated_finding = {
+                "scan_id": scan_id,
+                "program": metadata.get("program", "unknown"),
+                "scope_url": url,
+                "analysis_title": finding.get("title", "Unnamed Finding"),
+                "analysis_severity": finding.get("severity", "info").upper(),
+                "vrt_category": map_vrt_from_context({
+                    "title": finding.get("title", ""),
+                    "summary": str(finding.get("evidence", ""))
+                }).get("vrt_category", "API - Other"),
+                "confidence": 0.7,
+                "recommended_fix": "Review findings and implement appropriate security controls.",
+                "evidence": json.dumps(finding.get("evidence", {}), ensure_ascii=False),
+                "raw_event": json.dumps({
+                    "scan_id": scan_id,
+                    "original_payload": payload
+                }, ensure_ascii=False),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }
+            publish_finding(curated_finding)
+        
+        log.info(f"Completed scan_id={scan_id}: {len(findings)} findings published")
+        
     except Exception as e:
-        logging.warning("Failed to decode message.data: %s", e)
-        return {}
+        log.exception(f"Scan processing failed for scan_id={scan_id}: {e}")
 
+# API endpoints
+@app.get("/")
+def root():
+    return {
+        "service": "scan-worker",
+        "version": "2.0.0",
+        "status": "healthy",
+        "engine_available": ENGINE_AVAILABLE
+    }
+
+@app.get("/health")
+@app.get("/healthz")
+def health():
+    return {"status": "healthy", "engine_available": ENGINE_AVAILABLE, "timestamp": time.time()}
 
 @app.post("/pubsub/push")
-async def pubsub_push(request: Request) -> Response:
-    """
-    Pub/Sub push entrypoint. Always 204 on success to ack the message.
-    """
+async def pubsub_push(request: Request):
+    """Handle Pub/Sub push messages."""
     try:
         envelope = await request.json()
+        log.debug("Received push notification")
     except Exception:
+        log.warning("Invalid JSON in push request")
         return Response(status_code=400)
 
-    payload = _extract_payload(envelope)
+    payload = extract_pubsub_payload(envelope)
     if not payload:
-        logging.warning("empty_or_bad_payload")
-        return Response(status_code=204)
+        log.warning("Empty or invalid payload")
+        return Response(status_code=200)
 
-    # Normalized fields
-    url = payload.get("source_url") or payload.get("url")
-    explicit_type = payload.get("scan_type")  # optional override e.g., "openapi"
-    meta = {
-        "scan_id": payload.get("scan_id"),
-        "source": payload.get("source"),
-        "program": payload.get("program"),
-        "priority": payload.get("priority"),
-        "campaign": payload.get("campaign"),
-        "metadata": payload.get("metadata") or {},
-    }
+    asyncio.create_task(process_scan_request(payload))
+    return Response(status_code=200)
 
-    if not explicit_type and not url:
-        logging.warning("no_url_and_no_scan_type")
-        return Response(status_code=204)
-
+def extract_pubsub_payload(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract JSON payload from Pub/Sub message."""
     try:
-        _dispatch_scan(url or payload.get("source"), explicit_type, meta)
+        message = envelope.get("message", {})
+        if "data" in message:
+            data_b64 = message["data"]
+            if data_b64:
+                return json.loads(base64.b64decode(data_b64).decode("utf-8"))
+        
+        if "url" in envelope and "scan_id" in envelope:
+            return envelope
+            
     except Exception as e:
-        logging.exception("scan_handler_error url=%s err=%s", url, e)
+        log.error(f"Payload extraction failed: {e}")
+    
+    return None
 
-    return Response(status_code=204)
-
-
-@app.post("/scan")
-async def scan_direct(request: Request):
-    """
-    Accepts JSON like:
-      {"url":"https://example.com",
-       "scan_type":"openapi|postman|graphql|http",
-       "program":"...", "campaign":"...", "metadata":{...}, "scan_id":"..."}
-
-    Returns 200 with JSON on success.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid JSON")
-
-    url = body.get("url") or body.get("source_url") or body.get("source")
-    scan_type = body.get("scan_type")
-    if not url and not scan_type:
-        raise HTTPException(status_code=400, detail="missing url or scan_type")
-
-    meta = {
-        "scan_id": body.get("scan_id"),
-        "source": body.get("source"),
-        "program": body.get("program"),
-        "priority": body.get("priority"),
-        "campaign": body.get("campaign"),
-        "metadata": body.get("metadata") or {},
-    }
-    try:
-        _dispatch_scan(url or body.get("source"), scan_type, meta)
-    except Exception as e:
-        logging.exception("scan_direct_error url=%s err=%s", url, e)
-        raise HTTPException(status_code=500, detail="scan error")
-
-    return {"ok": True, "dispatched": True, "url": url, "scan_type": scan_type or "auto"}
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "8080"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
